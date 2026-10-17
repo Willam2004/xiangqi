@@ -1,0 +1,4 @@
+analysis/rea-*.json
+analysis/engine-before.cjs
+analysis/trace-*.json
+.DS_Store

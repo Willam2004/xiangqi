@@ -1,0 +1,7 @@
+{
+  "positions": 160,
+  "beforeMs": 12.03,
+  "afterMs": 7.12,
+  "speedup": 1.69,
+  "method": "median of 7 runs, same 160 positions, exhaustive vs geometry candidate enumeration"
+}
