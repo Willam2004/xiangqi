@@ -31,9 +31,117 @@ for(const s of ['r','b'])for(const k of 'RNBAKCP'){
 }
 function moves(b,s){const a=[];for(let f=0;f<90;f++)if(side(b[f])===s)for(const t of candidateSquares[b[f]][f])if(legal(b,f,t))a.push({from:f,to:t});return a}
 
-const val={K:100000,R:900,C:440,N:420,B:200,A:200,P:100};
-function evaluate(b,s){let v=0;for(let i=0;i<90;i++)if(b[i]){let p=b[i],y=i/9|0,advance=side(p)==='r'?9-y:y;let n=val[kind(p)]+(kind(p)==='P'?advance*12+(advance>=5?65:0):kind(p)==='N'?18*(4-Math.abs(i%9-4)):0);v+=side(p)===s?n:-n}return v}
-function best(b,s,level=2,budget){let deadline=Date.now()+(budget||[150,550,1400][level-1]),nodes=0,top=moves(b,s),best=top[0],depthDone=0;function order(b,ms){return ms.sort((a,z)=>(val[kind(b[z.to])]||0)-(val[kind(b[a.to])]||0))}function search(b,s,d,alpha,beta,ply){nodes++;if(nodes%64===0&&Date.now()>deadline)throw Error('time');if(!b.includes(s+'K'))return-1000000+ply;let ms=order(b,moves(b,s));if(!ms.length)return-1000000+ply;if(d<=0){let inCheck=check(b,s),stand=evaluate(b,s);if(d<=-3)return stand;if(!inCheck){if(stand>=beta)return stand;alpha=Math.max(alpha,stand);ms=ms.filter(m=>b[m.to]);if(!ms.length)return stand}}let v=d<=0&&!check(b,s)?evaluate(b,s):-Infinity;for(let m of ms){let z=-search(apply(b,m),other(s),d-1,-beta,-alpha,ply+1);v=Math.max(v,z);alpha=Math.max(alpha,z);if(alpha>=beta)break}return v}order(b,top);for(let d=1;d<=[1,3,4][level-1];d++){try{let score=-Infinity,choice=top[0];for(let m of top){let v=-search(apply(b,m),other(s),d-1,-Infinity,-score,1);if(v>score){score=v;choice=m}}best=choice;depthDone=d;top=[best,...top.filter(m=>m!==best)];if(score>900000)break}catch{break}}return{move:best,depth:depthDone,nodes}}
+const val={K:100000,R:900,C:450,N:430,B:200,A:200,P:100};
+function evaluate(b,s){
+ let score=0,heavy=0;for(const p of b)if(p&&'RCN'.includes(kind(p)))heavy++;
+ for(let i=0;i<90;i++){
+  const p=b[i];if(!p)continue;
+  const team=side(p),k=kind(p),x=i%9,y=i/9|0,advance=team==='r'?9-y:y,center=4-Math.abs(x-4);
+  let value=val[k];
+  if(k==='P')value+=advance<5?advance*7:65+center*10+Math.min(advance,8)*9-(advance===9?25:0);
+  if(k==='N'){
+   value+=center*10+Math.min(advance,6)*5+(heavy<=6?25:0);
+   for(const t of candidateSquares[p][i])if(pseudo(b,i,t))value+=7;
+  }
+  if(k==='R'||k==='C'){
+   value+=center*3+(k==='C'&&heavy<=6?-30:0);
+   for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    for(let X=x+dx,Y=y+dy;X>=0&&X<9&&Y>=0&&Y<10;X+=dx,Y+=dy){if(b[idx(X,Y)])break;value+=k==='R'?3:2}
+   }
+  }
+  if(k==='A'||k==='B')value+=heavy>=8?12:-15;
+  if(k==='K')value+=heavy>6?(advance===0?15:-advance*12):0;
+  score+=team===s?value:-value;
+ }
+ return score;
+}
+function best(position,team,level=2,budget){
+ level=Math.max(1,Math.min(3,level|0));
+ const started=Date.now(),deadline=started+(budget??[400,1800,3500][level-1]);
+ const TIMEOUT=Symbol('timeout'),MATE=1000000,table=new Map(),killers=[],history=new Int32Array(2*8100),path=new Set();
+ let nodes=0,ttHits=0,depthDone=0,scoreDone=null;
+ const b=position.slice(),key=s=>s+b.map(p=>p||'').join(','),same=(a,z)=>a&&z&&a.from===z.from&&a.to===z.to;
+ function tick(){nodes++;if((nodes&63)===0&&Date.now()>=deadline)throw TIMEOUT}
+ // Reuse the search board while generating and exploring moves; always undo it.
+ function generate(s,capturesOnly=false,firstOnly=false){
+  const list=[];
+  for(let from=0;from<90;from++)if(side(b[from])===s){
+   const piece=b[from];
+   for(const to of candidateSquares[piece][from]){
+    if(capturesOnly&&!b[to]||!pseudo(b,from,to))continue;
+    const captured=b[to];b[to]=piece;b[from]=null;
+    const valid=!check(b,s);b[from]=piece;b[to]=captured;
+    if(valid){list.push({from,to});if(firstOnly)return list}
+   }
+  }
+  return list;
+ }
+ function visit(m,fn){const p=b[m.from],c=b[m.to];b[m.to]=p;b[m.from]=null;try{return fn()}finally{b[m.from]=p;b[m.to]=c}}
+ function order(ms,s,ply,preferred){
+  const offset=s==='r'?0:8100;
+  const rank=m=>same(m,preferred)?10000000:b[m.to]?1000000+16*val[kind(b[m.to])]-val[kind(b[m.from])]:same(m,killers[ply]?.[0])?900000:same(m,killers[ply]?.[1])?800000:history[offset+m.from*90+m.to];
+  return ms.map(m=>({m,rank:rank(m)})).sort((a,z)=>z.rank-a.rank).map(x=>x.m);
+ }
+ function quiesce(s,alpha,beta,ply,qdepth){
+  tick();if(!b.includes(s+'K'))return -MATE+ply;
+  const checked=check(b,s),ms=generate(s,!checked);
+  if(!ms.length&&(checked||!generate(s,false,true).length))return -MATE+ply;
+  // Never stand pat while in check: search every legal evasion.
+  if(ply>=64)return evaluate(b,s);
+  if(!checked){const stand=evaluate(b,s);if(stand>=beta)return stand;alpha=Math.max(alpha,stand);if(qdepth>=8)return alpha}
+  for(const m of order(ms,s,ply)){
+   const value=visit(m,()=>-quiesce(other(s),-beta,-alpha,ply+1,qdepth+1));
+   if(value>=beta)return value;alpha=Math.max(alpha,value);
+  }
+  return alpha;
+ }
+ function search(s,depth,alpha,beta,ply){
+  if(depth<=0)return quiesce(s,alpha,beta,ply,0);
+  tick();if(!b.includes(s+'K'))return -MATE+ply;
+  const hash=key(s);if(path.has(hash))return 0;
+  const originalAlpha=alpha,entry=table.get(hash);
+  const unpack=v=>v>900000?v-ply:v< -900000?v+ply:v;
+  if(entry&&entry.depth>=depth){
+   const value=unpack(entry.score);ttHits++;
+   if(entry.bound==='exact'||entry.bound==='lower'&&value>=beta||entry.bound==='upper'&&value<=alpha)return value;
+  }
+  const ms=order(generate(s),s,ply,entry?.move);if(!ms.length)return -MATE+ply;
+  const checked=check(b,s);
+  let value=-Infinity,choice=ms[0];path.add(hash);
+  try{
+   for(let n=0;n<ms.length;n++){
+    const m=ms[n],quiet=!b[m.to];
+    let v=visit(m,()=>{
+     if(n===0)return -search(other(s),depth-1,-beta,-alpha,ply+1);
+     // Reduce late quiet moves, then verify at full depth if they improve alpha.
+     const reduction=depth>=3&&n>=4&&quiet&&!checked&&!check(b,other(s))?1:0;
+     let z=-search(other(s),depth-1-reduction,-alpha-1,-alpha,ply+1);
+     if(reduction&&z>alpha)z=-search(other(s),depth-1,-alpha-1,-alpha,ply+1);
+     return z>alpha&&z<beta?-search(other(s),depth-1,-beta,-alpha,ply+1):z;
+    });
+    if(v>value){value=v;choice=m}alpha=Math.max(alpha,v);
+    if(alpha>=beta){
+     if(!b[m.to]){killers[ply]=[m,killers[ply]?.[0]];history[(s==='r'?0:8100)+m.from*90+m.to]+=depth*depth}
+     break;
+    }
+   }
+  }finally{path.delete(hash)}
+  if(table.size>100000)table.clear();
+  table.set(hash,{depth,move:choice,score:value>900000?value+ply:value< -900000?value-ply:value,bound:value<=originalAlpha?'upper':value>=beta?'lower':'exact'});
+  return value;
+ }
+ let top=order(generate(team),team,0),choice=top[0];
+ if(!top.length)return {move:null,depth:0,nodes,score:-MATE,elapsedMs:Date.now()-started,ttHits};
+ for(let depth=1;depth<=[3,7,10][level-1];depth++){
+  try{
+   if(Date.now()>=deadline)break;
+   const score=search(team,depth,-Infinity,Infinity,0);
+   choice=table.get(key(team)).move;scoreDone=score;depthDone=depth;
+   if(Math.abs(score)>900000)break;
+  }catch(error){if(error!==TIMEOUT)throw error;break}
+ }
+ return {move:choice,depth:depthDone,nodes,score:scoreDone,elapsedMs:Date.now()-started,ttHits};
+}
 const labels={rK:'帅',rA:'仕',rB:'相',rN:'马',rR:'车',rC:'炮',rP:'兵',bK:'将',bA:'士',bB:'象',bN:'马',bR:'车',bC:'炮',bP:'卒'};
 function notation(b,m){let p=b[m.from],s=side(p),x=m.from%9,y=m.from/9|0,X=m.to%9,Y=m.to/9|0,num=n=>s==='r'?'一二三四五六七八九'[n-1]:String(n),file=x=>s==='r'?9-x:x+1;return labels[p]+num(file(x))+(Y===y?'平':(s==='r'?Y<y:Y>y)?'进':'退')+num(Y===y||'NAB'.includes(kind(p))?file(X):Math.abs(Y-y))}
 root.XQ={initial,side,kind,other,idx,pseudo,check,legal,moves,apply,evaluate,best,labels,notation};if(typeof module!=='undefined')module.exports=root.XQ;

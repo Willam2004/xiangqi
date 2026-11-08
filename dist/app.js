@@ -6,17 +6,18 @@ const puzzles=[
 {name:'马去车来',tag:'一着制胜',desc:'移马开线，体会闪将的妙处。',pieces:[[4,0,'bK'],[5,0,'rN'],[7,0,'rR'],[3,4,'rR'],[4,5,'rP'],[4,9,'rK']]}
 ];
 function puzzleBoard(n){let b=Array(90).fill(null);for(let[x,y,p]of puzzles[n].pieces)b[E.idx(x,y)]=p;return b}
-let state={board:E.initial(),turn:'r',mode:'ai',level:2,human:'r',flipped:false,history:[],result:null,puzzle:0,sound:false,completed:[]};
+let state={board:E.initial(),turn:'r',mode:'ai',level:3,human:'r',flipped:false,history:[],result:null,puzzle:0,sound:false,completed:[]};
 try{let saved=JSON.parse(localStorage.getItem('yijing-v1'));if(saved&&saved.board?.length===90&&saved.board.every(p=>p===null||Object.hasOwn(E.labels,p))&&['ai','local','puzzle'].includes(saved.mode)&&['r','b'].includes(saved.turn)&&Array.isArray(saved.history)){state={...state,...saved};state.completed=Array.isArray(state.completed)?state.completed:[]}}catch{}
 let selected=null,targets=[],hintMove=null,busy=false,worker=null,job=0,toastTimer,audioCtx;
-let animating=false,feedbackTimers=[],feedbackEpoch=0;
+let animating=false,feedbackTimers=[],feedbackEpoch=0,trailUntil=0;
 function toast(t){$('#toast').textContent=t;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),2600)}
 function save(){try{localStorage.setItem('yijing-v1',JSON.stringify(state));$('#saveStatus').textContent='本机自动保存'}catch{$('#saveStatus').textContent='浏览器未允许保存'}}
 function pos(i){if(state.flipped)i=89-i;return{left:((i%9*100+50)/9)+'%',top:(((i/9|0)*100+50)/10)+'%'}}
 function at(el,i){Object.assign(el.style,pos(i))}
 function pieceName(p){return (E.side(p)==='r'?'红':'黑')+E.labels[p]}
 function clearMoveEffects(){
- feedbackEpoch++;for(const timer of feedbackTimers)clearTimeout(timer);feedbackTimers=[];animating=false;
+ feedbackEpoch++;for(const timer of feedbackTimers)clearTimeout(timer);feedbackTimers=[];animating=false;trailUntil=0;
+ $('#moveTrail').replaceChildren();
  $('#moveEffects').replaceChildren();$('#boardAlert').hidden=true;$('#boardAlert').replaceChildren();
 }
 function afterFeedback(fn,delay){const epoch=feedbackEpoch;feedbackTimers.push(setTimeout(()=>{if(epoch===feedbackEpoch)fn()},delay))}
@@ -26,15 +27,20 @@ function drawMoveTrail(){
  feedback.className='move-feedback'+(checked?' in-check':'');
  if(!h){feedback.textContent='点击棋子，绿色圆点为可落位置';return}
  const capture=h.board[h.move.to],mover=h.board[h.move.from];
+ svg.classList.toggle('is-fading',performance.now()>=trailUntil-400);
+ if(performance.now()<trailUntil){
  const point=i=>{if(state.flipped)i=89-i;return {x:i%9*100+50,y:(i/9|0)*100+50}};
  const a=point(h.move.from),b=point(h.move.to),distance=Math.hypot(b.x-a.x,b.y-a.y);
  const end={x:b.x-(b.x-a.x)*48/distance,y:b.y-(b.y-a.y)*48/distance};
  svg.classList.toggle('capture-trail',!!capture);
  svg.innerHTML=`<defs><marker id="moveArrow" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7Z" fill="currentColor"/></marker></defs><path class="trail-halo" d="M${a.x} ${a.y}L${end.x} ${end.y}"/><path class="trail-line" d="M${a.x} ${a.y}L${end.x} ${end.y}" marker-end="url(#moveArrow)"/><circle cx="${a.x}" cy="${a.y}" r="15" class="trail-origin"/>`;
+ }
  feedback.textContent=(capture?pieceName(mover)+' 吃掉 '+pieceName(capture):pieceName(mover)+' · '+h.notation)+(checked?'　·　将军！'+(state.turn==='r'?'红方':'黑方')+'须应将':capture?' · '+h.notation:'');
  feedback.classList.toggle('is-capture',!!capture);
 }
 function playMoveFeedback(m,mover,captured,checked){
+ afterFeedback(()=>$('#moveTrail').classList.add('is-fading'),1000);
+ afterFeedback(()=>{trailUntil=0;$('#moveTrail').replaceChildren()},1400);
  if(captured){
   const ghost=document.createElement('div');ghost.className='piece captured-ghost '+E.side(captured);ghost.textContent=E.labels[captured];at(ghost,m.to);$('#moveEffects').append(ghost);
   const ring=document.createElement('div');ring.className='capture-ring';at(ring,m.to);$('#moveEffects').append(ring);
@@ -91,8 +97,28 @@ function renderBoard(){
  drawMoveTrail();
 }
 
-function render(){renderBoard();$$('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.mode));$$('[data-level]').forEach(b=>b.classList.toggle('active',+b.dataset.level===state.level));$$('[data-side]').forEach(b=>b.classList.toggle('active',b.dataset.side===state.human));$('#aiOptions').hidden=state.mode!=='ai';$('#puzzleOptions').hidden=state.mode!=='puzzle';$('#modeTitle').textContent={ai:'与弈境，切磋一局',local:'对坐成局，以棋会友',puzzle:'方寸残局，别有洞天'}[state.mode];$('#modeDesc').textContent={ai:'棋逢对手，落子间亦是修行。',local:'同屏双人轮流执子，红方先行。',puzzle:'红方先行，寻找一着将杀的妙手。'}[state.mode];$('#newGame span').textContent=state.mode==='puzzle'?'重试此局':'开启新局';$('#puzzleOptions').innerHTML=puzzles.map((p,i)=>`<button class="puzzle-card ${state.puzzle===i?'active':''}" data-puzzle="${i}"><strong>${String(i+1).padStart(2,'0')} · ${p.name}</strong><small>${state.completed.includes(i)?'✓ 已解':p.tag}</small><p>${p.desc}</p></button>`).join('');$$('[data-puzzle]').forEach(b=>b.onclick=()=>askReset(()=>{state.puzzle=+b.dataset.puzzle;newGame()}));let top=state.flipped?'r':'b',bottom=E.other(top);for(let[loc,s]of[['top',top],['bottom',bottom]]){let isAI=state.mode==='ai'?s!==state.human:state.mode==='puzzle'?s==='b':false;$('#'+loc+'Avatar').className='avatar '+(s==='r'?'red':'dark');$('#'+loc+'Avatar').textContent=s==='r'?'帅':'将';$('#'+loc+'Name').textContent=isAI?(state.mode==='puzzle'?'残局守方':'弈境棋友 · '+['入门','进阶','高手'][state.level-1]):state.mode==='local'?(s==='r'?'红方棋友':'黑方棋友'):'闲坐执'+(s==='r'?'红':'黑');$('#'+loc+'Sub').textContent='执'+(s==='r'?'红':'黑')+' · '+(s==='r'?'先行一步':'从容应战');$('#'+loc+'Turn').textContent=state.result?'本局已结束':state.turn===s?(isAI?'正在思考':'请落子'):'等待落子';$('#'+loc+'Turn').classList.toggle('current',!state.result&&state.turn===s)}
-const checked=E.check(state.board,state.turn)&&!state.result;$('#status').classList.toggle('check-status',checked);$('#status').textContent=state.result?.text||(checked?((state.turn==='r'?'红方':'黑方')+'被将军！'+(busy?'正在思考应将…':'请先解除将军')):busy?'弈境正在思考，请稍候…':(state.turn==='r'?'红方':'黑方')+'行棋'+(state.mode==='puzzle'?' · 寻找制胜一着':'，请落子'));$('.live-dot').textContent=state.result?'已结束':'进行中';$('#moveCount').textContent='第 '+String(Math.floor(state.history.length/2)+1).padStart(2,'0')+' 回合';$('#undo').disabled=!state.history.length;$('#hint').disabled=busy||animating||!!state.result;$('#flip').disabled=animating;$('#sound').classList.toggle('on',state.sound);$('#sound').setAttribute('aria-pressed',String(state.sound));renderRecords()}
+function render(){renderBoard();$$('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.mode));$$('[data-level]').forEach(b=>b.classList.toggle('active',+b.dataset.level===state.level));$$('[data-side]').forEach(b=>b.classList.toggle('active',b.dataset.side===state.human));$('#difficultyHint').textContent=['入门 · 更稳健的基础攻防','进阶 · 深入计算，约 2 秒应手','高手 · 加强战术搜索，约 3–4 秒应手'][state.level-1];$('#aiOptions').hidden=state.mode!=='ai';$('#puzzleOptions').hidden=state.mode!=='puzzle';$('#modeTitle').textContent={ai:'与弈境，切磋一局',local:'对坐成局，以棋会友',puzzle:'方寸残局，别有洞天'}[state.mode];$('#modeDesc').textContent={ai:'棋逢对手，落子间亦是修行。',local:'同屏双人轮流执子，红方先行。',puzzle:'红方先行，寻找一着将杀的妙手。'}[state.mode];$('#newGame span').textContent=state.mode==='puzzle'?'重试此局':'开启新局';$('#puzzleOptions').innerHTML=puzzles.map((p,i)=>`<button class="puzzle-card ${state.puzzle===i?'active':''}" data-puzzle="${i}"><strong>${String(i+1).padStart(2,'0')} · ${p.name}</strong><small>${state.completed.includes(i)?'✓ 已解':p.tag}</small><p>${p.desc}</p></button>`).join('');$$('[data-puzzle]').forEach(b=>b.onclick=()=>askReset(()=>{state.puzzle=+b.dataset.puzzle;newGame()}));let top=state.flipped?'r':'b',bottom=E.other(top);for(let[loc,s]of[['top',top],['bottom',bottom]]){let isAI=state.mode==='ai'?s!==state.human:state.mode==='puzzle'?s==='b':false;$('#'+loc+'Avatar').className='avatar '+(s==='r'?'red':'dark');$('#'+loc+'Avatar').textContent=s==='r'?'帅':'将';$('#'+loc+'Name').textContent=isAI?(state.mode==='puzzle'?'残局守方':'弈境棋友 · '+['入门','进阶','高手'][state.level-1]):state.mode==='local'?(s==='r'?'红方棋友':'黑方棋友'):'闲坐执'+(s==='r'?'红':'黑');$('#'+loc+'Sub').textContent='执'+(s==='r'?'红':'黑')+' · '+(s==='r'?'先行一步':'从容应战');$('#'+loc+'Turn').textContent=state.result?'本局已结束':state.turn===s?(isAI?'正在思考':'请落子'):'等待落子';$('#'+loc+'Turn').classList.toggle('current',!state.result&&state.turn===s)}
+const checked=E.check(state.board,state.turn)&&!state.result;$('#status').classList.toggle('check-status',checked);$('#status').textContent=state.result?.text||(checked?((state.turn==='r'?'红方':'黑方')+'被将军！'+(busy?'正在思考应将…':'请先解除将军')):busy?'弈境正在思考，请稍候…':(state.turn==='r'?'红方':'黑方')+'行棋'+(state.mode==='puzzle'?' · 寻找制胜一着':'，请落子'));$('.live-dot').textContent=state.result?'已结束':'进行中';$('#moveCount').textContent='第 '+String(Math.floor(state.history.length/2)+1).padStart(2,'0')+' 回合';$('#undo').disabled=!state.history.length;$('#hint').disabled=busy||animating||!!state.result;$('#flip').disabled=animating;$('#sound').classList.toggle('on',state.sound);$('#sound').setAttribute('aria-pressed',String(state.sound));renderCaptured();renderRecords()}
+// Derive captures from played moves, so puzzle setup and undone moves never count.
+function renderCaptured(){
+ const captures={r:[],b:[]};
+ for(const h of state.history){const piece=h.board[h.move.to];if(piece)captures[h.turn].push(piece)}
+ for(const [loc,side] of [['top',state.flipped?'r':'b'],['bottom',state.flipped?'b':'r']]){
+  const tray=$('#'+loc+'Captured'),pieces=captures[side],name=side==='r'?'红方':'黑方';
+  tray.replaceChildren();tray.setAttribute('aria-label',name+'已吃棋子，共'+pieces.length+'枚');
+  const heading=document.createElement('div');heading.className='captured-heading';
+  const title=document.createElement('strong');title.textContent=name+'已吃';
+  const total=document.createElement('span');total.textContent=pieces.length+' 枚';heading.append(title,total);tray.append(heading);
+  const list=document.createElement('div');list.className='captured-list';tray.append(list);
+  if(!pieces.length){const empty=document.createElement('span');empty.className='captured-empty';empty.textContent='尚未吃子';list.append(empty);continue}
+  const counts=new Map();for(const p of pieces)counts.set(p,(counts.get(p)||0)+1);
+  for(const [piece,count] of counts){
+   const item=document.createElement('span');item.className='captured-item';item.setAttribute('aria-label',pieceName(piece)+' '+count+'枚');item.title='吃掉'+pieceName(piece)+' '+count+'枚';
+   const token=document.createElement('span');token.className='captured-token '+E.side(piece);token.textContent=E.labels[piece];token.setAttribute('aria-hidden','true');item.append(token);
+   const amount=document.createElement('span');amount.className='captured-amount';amount.textContent='×'+count;amount.setAttribute('aria-hidden','true');item.append(amount);list.append(item);
+  }
+ }
+}
 function renderRecords(){
  const el=$('#records');
  if(!state.history.length){el.innerHTML='<div class="empty-record"><span>谱</span><p>一局新棋，静待第一步</p><small>每一步，都值得回味</small></div>';return}
@@ -114,7 +140,7 @@ function renderRecords(){
 function isComputer(){return state.mode==='ai'?state.turn!==state.human:state.mode==='puzzle'&&state.turn==='b'}
 function clickSquare(i){if(state.result){toast('本局已结束，可以开启新局或悔棋复盘');return}if(animating){toast('请稍候，正在展示上一步走棋');return}if(busy||isComputer()){toast('请等待对手落子');return}hintMove=null;if(E.side(state.board[i])===state.turn){selected=i;targets=E.moves(state.board,state.turn).filter(m=>m.from===i).map(m=>m.to);renderBoard();return}if(selected!==null){if(targets.includes(i)){move({from:selected,to:i});return}toast('此处不能落子，请选择标记位置');selected=null;targets=[];renderBoard()}}
 function sound(capture){if(!state.sound)return;try{audioCtx??=new(window.AudioContext||window.webkitAudioContext)();audioCtx.resume();let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.type='sine';o.frequency.setValueAtTime(capture?310:640,audioCtx.currentTime);o.frequency.exponentialRampToValueAtTime(100,audioCtx.currentTime+.09);g.gain.setValueAtTime(.14,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.13);o.start();o.stop(audioCtx.currentTime+.14)}catch{}}
-function move(m){if(!E.legal(state.board,m.from,m.to))return;clearMoveEffects();let mover=state.board[m.from],captured=state.board[m.to];state.history.push({board:state.board.slice(),turn:state.turn,move:m,notation:E.notation(state.board,m)});state.board=E.apply(state.board,m);state.turn=E.other(state.turn);selected=null;targets=[];hintMove=null;let ms=E.moves(state.board,state.turn);if(!ms.length){let winner=E.other(state.turn);state.result={winner,text:(winner==='r'?'红方':'黑方')+'获胜 · '+(E.check(state.board,state.turn)?'将杀':'困毙')};if(state.mode==='puzzle'&&winner==='r'){if(!state.completed.includes(state.puzzle))state.completed.push(state.puzzle);state.result.text='残局已解 · '+puzzles[state.puzzle].name}}else{let key=JSON.stringify(state.board),repeats=state.history.filter(h=>h.turn===state.turn&&JSON.stringify(h.board)===key).length;if(repeats>=2)state.result={winner:null,text:'和棋 · 局面三次重复'}}animating=true;save();render();playMoveFeedback(m,mover,captured,E.check(state.board,state.turn))}
+function move(m){if(!E.legal(state.board,m.from,m.to))return;clearMoveEffects();let mover=state.board[m.from],captured=state.board[m.to];state.history.push({board:state.board.slice(),turn:state.turn,move:m,notation:E.notation(state.board,m)});state.board=E.apply(state.board,m);state.turn=E.other(state.turn);selected=null;targets=[];hintMove=null;let ms=E.moves(state.board,state.turn);if(!ms.length){let winner=E.other(state.turn);state.result={winner,text:(winner==='r'?'红方':'黑方')+'获胜 · '+(E.check(state.board,state.turn)?'将杀':'困毙')};if(state.mode==='puzzle'&&winner==='r'){if(!state.completed.includes(state.puzzle))state.completed.push(state.puzzle);state.result.text='残局已解 · '+puzzles[state.puzzle].name}}else{let key=JSON.stringify(state.board),repeats=state.history.filter(h=>h.turn===state.turn&&JSON.stringify(h.board)===key).length;if(repeats>=2)state.result={winner:null,text:'和棋 · 局面三次重复'}}animating=true;trailUntil=performance.now()+1400;save();render();playMoveFeedback(m,mover,captured,E.check(state.board,state.turn))}
 function cancel(){job++;worker?.terminate();worker=null;busy=false}
 function calculate(hint=false){cancel();busy=true;render();let id=job;worker=new Worker('worker.js');worker.onmessage=e=>{if(e.data.id!==job)return;busy=false;worker.terminate();worker=null;if(hint){hintMove=e.data.move;selected=null;targets=[];render();if(hintMove)toast('建议：'+E.notation(state.board,hintMove)+' · 已标出起点与落点')}else if(e.data.move)move(e.data.move);else render()};worker.onerror=()=>{cancel();render();toast('计算暂不可用，请重试')};worker.postMessage({board:state.board,side:state.turn,level:hint?3:state.mode==='puzzle'?3:state.level,id})}
 function computer(){if(!animating&&!state.result&&isComputer())calculate()}
